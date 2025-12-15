@@ -28,37 +28,45 @@ def run_sleep_job(job_id: str) -> None:
         job["state"] = "FAILED"
         job["error"] = str(e)
 
+JOB_HANDLERS = {
+    "sleep": run_sleep_job,
+}
 
 @app.post("/jobs")  # Handle POST requests sent to /jobs
-def create_job(job: dict, background_tasks: BackgroundTasks):  # create a new job from request payload
-    job_id = str(uuid4())  # create an id for the job
+@app.post("/jobs")
+def create_job(job: dict, background_tasks: BackgroundTasks):
+    job_id = str(uuid4())
 
-    if "type" not in job:
+    job_type = job.get("type")
+    if not job_type:
         raise HTTPException(status_code=400, detail="Job type is required")
 
-    if job["type"] != "sleep":
-        raise HTTPException(status_code=400, detail="Unsupported job type")
-    
-    if "seconds" not in job:
-        raise HTTPException(status_code=400, detail="seconds is required")
+    handler = JOB_HANDLERS.get(job_type)
+    if handler is None:
+        raise HTTPException(status_code=400, detail=f"Unsupported job type: {job_type}")
 
-    if not isinstance(job["seconds"], (int, float)):
-        raise HTTPException(status_code=400, detail="seconds must be a number")
+    # Job-specific validation
+    if job_type == "sleep":
+        seconds = job.get("seconds")
+        if seconds is None:
+            raise HTTPException(status_code=400, detail="seconds is required")
+        if not isinstance(seconds, (int, float)):
+            raise HTTPException(status_code=400, detail="seconds must be a number")
+        if seconds <= 0:
+            raise HTTPException(status_code=400, detail="seconds must be > 0")
 
-    if job["seconds"] <= 0:
-        raise HTTPException(status_code=400, detail="seconds must be > 0")
-
-    JOBS[job_id] = {  # job id index of job dict updates its id, state, and payload.
+    JOBS[job_id] = {
         "id": job_id,
         "state": "PENDING",
-        "payload": job
+        "payload": job,
+        "type": job_type,
     }
 
-    background_tasks.add_task(run_sleep_job, job_id)
+    background_tasks.add_task(handler, job_id)
 
-    return {  # returns the ID and the state of the job.
+    return {
         "id": job_id,
-        "state": "PENDING"
+        "state": "PENDING",
     }
 
 @app.get("/jobs/{job_id}")
