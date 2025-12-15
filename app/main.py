@@ -15,6 +15,16 @@ def create_job(job: dict): # create a new job from request payload
 
     if job["type"] != "sleep":
         raise HTTPException(status_code=400, detail="Unsupported job type")
+    
+    if "seconds" not in job:
+        raise HTTPException(status_code=400, detail="seconds is required")
+
+    if not isinstance(job["seconds"], (int, float)):
+        raise HTTPException(status_code=400, detail="seconds must be a number")
+
+    if job["seconds"] <= 0:
+        raise HTTPException(status_code=400, detail="seconds must be > 0")
+
 
 
     JOBS[job_id] = {  # job id index of job dict updates its id, state, and payload.
