@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from datetime import datetime, timezone
 from uuid import uuid4
 import time  # Don't forget to import time for sleep
 
@@ -6,6 +7,8 @@ app = FastAPI()  # created the fast API server
 
 JOBS = {}  # job_id -> {id, state, payload, ...}
 
+def now_utc():
+    return datetime.now(timezone.utc)
 
 def run_sleep_job(job_id: str) -> None:
     """
@@ -14,10 +17,15 @@ def run_sleep_job(job_id: str) -> None:
     """
     job = JOBS.get(job_id)
     if job is None:
+        return
+    
+    if job["state"] != "PENDING":
         return  # job was deleted or never existed
     
     # Move to RUNNING
     job["state"] = "RUNNING"
+    job["started_at"] = now_utc()
+
 
     try:
         seconds = job["payload"]["seconds"]
@@ -27,13 +35,17 @@ def run_sleep_job(job_id: str) -> None:
     except Exception as e:
         job["state"] = "FAILED"
         job["error"] = str(e)
+    finally:
+        job["finished_at"] = now_utc()
+        job["duration_seconds"] = (
+            job["finished_at"] - job["started_at"]
+        ).total_seconds()
 
 JOB_HANDLERS = {
     "sleep": run_sleep_job,
 }
 
 @app.post("/jobs")  # Handle POST requests sent to /jobs
-@app.post("/jobs")
 def create_job(job: dict, background_tasks: BackgroundTasks):
     job_id = str(uuid4())
 
@@ -57,9 +69,12 @@ def create_job(job: dict, background_tasks: BackgroundTasks):
 
     JOBS[job_id] = {
         "id": job_id,
+        "type": job_type,
         "state": "PENDING",
         "payload": job,
-        "type": job_type,
+        "created_at": now_utc(),
+        "started_at": None,
+        "finished_at": None,
     }
 
     background_tasks.add_task(handler, job_id)
