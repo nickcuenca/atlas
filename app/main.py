@@ -1,76 +1,83 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from datetime import datetime, timezone
 from uuid import uuid4
-import time  # Don't forget to import time for sleep
+from enum import Enum
+import time
 
-app = FastAPI()  # created the fast API server
+app = FastAPI()
 
-JOBS = {}  # job_id -> {id, state, payload, ...}
+JOBS = {}  # job_id -> job dict
+
+
+class JobState(str, Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+
 
 def now_utc():
     return datetime.now(timezone.utc)
+
+
+def run_sleep_job(job_id: str) -> None:
+    job = JOBS.get(job_id)
+    if job is None:
+        return
+    if job["state"] != JobState.PENDING:
+        return
+
+    job["state"] = JobState.RUNNING
+    job["started_at"] = now_utc()
+
+    try:
+        seconds = job["payload"]["seconds"]
+        time.sleep(seconds)
+        job["state"] = JobState.SUCCESS
+        job["result"] = {"slept_seconds": seconds}
+
+    except Exception as e:
+        job["state"] = JobState.FAILED
+        job["error"] = str(e)
+
+    finally:
+        job["finished_at"] = now_utc()
+        if job["started_at"] is not None:
+            job["duration_seconds"] = (job["finished_at"] - job["started_at"]).total_seconds()
+
 
 def run_echo_job(job_id: str) -> None:
     job = JOBS.get(job_id)
     if job is None:
         return
-    if job["state"] != "PENDING":
+    if job["state"] != JobState.PENDING:
         return
 
-    job["state"] = "RUNNING"
+    job["state"] = JobState.RUNNING
     job["started_at"] = now_utc()
 
     try:
-        message = job["payload"]["message"]
-        job["result"] = {"echo": message}
-        job["state"] = "SUCCESS"
-    except Exception as e:
-        job["state"] = "FAILED"
-        job["error"] = str(e)
-    finally:
-        job["finished_at"] = now_utc()
-        job["duration_seconds"] = (
-            job["finished_at"] - job["started_at"]
-        ).total_seconds()
-
-def run_sleep_job(job_id: str) -> None:
-    """
-    Worker logic for a sleep job.
-    Runs in the background after the request returns.
-    """
-    job = JOBS.get(job_id)
-    if job is None:
-        return
-    
-    if job["state"] != "PENDING":
-        return  # job was deleted or never existed
-    
-    # Move to RUNNING
-    job["state"] = "RUNNING"
-    job["started_at"] = now_utc()
-
-
-    try:
-        seconds = job["payload"]["seconds"]
-        time.sleep(seconds)
-        job["state"] = "SUCCESS"
+        # simplest echo: return the payload as-is
+        job["result"] = job["payload"]
+        job["state"] = JobState.SUCCESS
 
     except Exception as e:
-        job["state"] = "FAILED"
+        job["state"] = JobState.FAILED
         job["error"] = str(e)
+
     finally:
         job["finished_at"] = now_utc()
-        job["duration_seconds"] = (
-            job["finished_at"] - job["started_at"]
-        ).total_seconds()
+        if job["started_at"] is not None:
+            job["duration_seconds"] = (job["finished_at"] - job["started_at"]).total_seconds()
+
 
 JOB_HANDLERS = {
     "sleep": run_sleep_job,
     "echo": run_echo_job,
-
 }
 
-@app.post("/jobs")  # Handle POST requests sent to /jobs
+
+@app.post("/jobs")
 def create_job(job: dict, background_tasks: BackgroundTasks):
     job_id = str(uuid4())
 
@@ -91,38 +98,28 @@ def create_job(job: dict, background_tasks: BackgroundTasks):
             raise HTTPException(status_code=400, detail="seconds must be a number")
         if seconds <= 0:
             raise HTTPException(status_code=400, detail="seconds must be > 0")
-        
-    if job_type == "echo":
-        message = job.get("message")
-        if message is None:
-            raise HTTPException(status_code=400, detail="message is required")
-        if not isinstance(message, str):
-            raise HTTPException(status_code=400, detail="message must be a string")
-        if message.strip() == "":
-            raise HTTPException(status_code=400, detail="message must not be empty")
-
 
     JOBS[job_id] = {
         "id": job_id,
         "type": job_type,
-        "state": "PENDING",
+        "state": JobState.PENDING,
         "payload": job,
         "result": None,
+        "error": None,
         "created_at": now_utc(),
         "started_at": None,
         "finished_at": None,
+        "duration_seconds": None,
     }
 
     background_tasks.add_task(handler, job_id)
 
-    return {
-        "id": job_id,
-        "state": "PENDING",
-    }
+    return {"id": job_id, "state": JobState.PENDING}
+
 
 @app.get("/jobs/{job_id}")
-def get_job(job_id: str):  # gets a job that currently exists
-    job = JOBS.get(job_id)  # dynamically create the job we need
-    if job is None:  # if no job
-        raise HTTPException(status_code=404, detail="Job not found")  # display code 404 not found
-    return job  # return the job
+def get_job(job_id: str):
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
