@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from uuid import uuid4
 
 app = FastAPI() #created the fast API server
@@ -20,3 +20,11 @@ def create_job(job: dict): # create a new job from request payload
         "id" : job_id,
         "state" : "PENDING"
     }
+
+@app.get("/jobs/{job_id}")
+def get_job(job_id: str): # gets a job that currently exsits
+    job = JOBS.get(job_id) # dynamically create the job we need
+    if job is None: #if no job
+        raise HTTPException(status_code=404, detail="Job not found") #display code 404 not found
+    return job #return the job
+    
