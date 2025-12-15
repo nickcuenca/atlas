@@ -2,24 +2,20 @@
 
 Atlas is a lightweight job execution API built with FastAPI, designed to explore backend and distributed systems concepts through incremental, hands-on development.
 
-## Current Capabilities (v0.2)
+## Current Capabilities (v0.3)
 - REST API for asynchronous job submission via JSON payloads
 - UUID-based job identification
 - In-memory job storage and state tracking
-- Job retrieval by ID
-- Input validation for supported job types
-- Background execution using FastAPI `BackgroundTasks`
-- Job lifecycle state transitions: `PENDING` → `RUNNING` → `SUCCESS` / `FAILED`
+- Background job execution using FastAPI BackgroundTasks
+- Job lifecycle states: PENDING → RUNNING → SUCCESS / FAILED
+- Job timing metadata (created_at, started_at, finished_at, duration)
+- Handler-based job dispatch architecture
 
 ## Supported Job Types
-- `sleep` — placeholder job type used to model long-running work
+### sleep
+Simulates long-running work.
 
-## API Endpoints
-
-### Create Job
-`POST /jobs`
-
-Example request:
+Example payload:
 ```json
 {
   "type": "sleep",
@@ -27,7 +23,23 @@ Example request:
 }
 ```
 
-Example response:
+### echo
+Echoes a provided message immediately (useful for testing and extensibility).
+
+Example payload:
+```json
+{
+  "type": "echo",
+  "message": "hello world"
+}
+```
+
+## API Endpoints
+
+### Create Job
+POST /jobs
+
+Returns:
 ```json
 {
   "id": "<job_id>",
@@ -36,72 +48,37 @@ Example response:
 ```
 
 ### Get Job
-`GET /jobs/{job_id}`
+GET /jobs/{job_id}
 
-Example response (shape):
-```json
-{
-  "id": "<job_id>",
-  "state": "RUNNING",
-  "payload": {
-    "type": "sleep",
-    "seconds": 3
-  }
-}
-```
+Returns the full job object, including:
+- id
+- type
+- state
+- payload
+- timestamps
+- duration (when complete)
 
-If an error occurs during execution, the job will return:
-```json
-{
-  "id": "<job_id>",
-  "state": "FAILED",
-  "payload": { "...": "..." },
-  "error": "<error_message>"
-}
-```
-
-## How It Works (v0.2)
-1. `POST /jobs` validates the incoming JSON payload.
-2. A job record is stored in-memory in the `JOBS` dictionary.
-3. The API schedules `run_sleep_job(job_id)` using `BackgroundTasks` so the request can return immediately.
-4. The background task updates state to `RUNNING`, sleeps for `seconds`, then marks the job `SUCCESS` (or `FAILED` with an error).
-
-> Note: This version is intentionally simple and learning-focused. It is not yet a true distributed system.
-
-## Architecture (v0.2)
+## Architecture (Current)
 - FastAPI application
-- In-memory job store (Python dictionary)
-- Background execution via FastAPI `BackgroundTasks` (runs in the same process)
-- No persistence (jobs are lost on server restart)
-- No external queue or separate worker process yet
+- Stateless API layer
+- In-memory job store (Python dict)
+- Background task execution
+- Job handler registry (JOB_HANDLERS)
 
-## Local Development
+> Note: Jobs are stored in memory and will be lost on server restart.
 
-### Run the server
-From the project root:
-```bash
-uvicorn app.main:app --reload
-```
-
-Then open:
-- Swagger UI: `http://127.0.0.1:8000/docs`
-
-### Quick Test (Swagger)
-1. Go to `/docs`
-2. Use `POST /jobs` with:
-   ```json
-   {"type":"sleep","seconds":3}
-   ```
-3. Copy the returned job id
-4. Use `GET /jobs/{job_id}` to watch the state transition
+## Design Goals
+- Learn backend systems from first principles
+- Model real-world job orchestration patterns
+- Maintain clarity and correctness over premature complexity
 
 ## Roadmap
-- Pydantic models for strict request/response schemas
-- Job type dispatch system (cleanly add more job handlers)
-- Persistent storage (PostgreSQL) so jobs survive restarts
-- Redis-backed queue + separate worker process (true distributed execution)
-- Retries, timeouts, idempotency, and cancellation
-- Metrics + structured logging + tests + load testing
+- Retry logic and failure policies
+- Persistent storage (PostgreSQL)
+- Redis-backed job queues
+- Dedicated worker processes
+- Horizontal scaling
+- Authentication and rate limiting
 
-## Goals
-Atlas is a learning-focused project aimed at building real-world backend and distributed systems intuition, starting from first principles and evolving toward production-grade architecture.
+---
+Atlas is intentionally built step-by-step to reflect how real systems evolve, not how tutorials shortcut.

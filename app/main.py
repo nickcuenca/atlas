@@ -10,6 +10,29 @@ JOBS = {}  # job_id -> {id, state, payload, ...}
 def now_utc():
     return datetime.now(timezone.utc)
 
+def run_echo_job(job_id: str) -> None:
+    job = JOBS.get(job_id)
+    if job is None:
+        return
+    if job["state"] != "PENDING":
+        return
+
+    job["state"] = "RUNNING"
+    job["started_at"] = now_utc()
+
+    try:
+        message = job["payload"]["message"]
+        job["result"] = {"echo": message}
+        job["state"] = "SUCCESS"
+    except Exception as e:
+        job["state"] = "FAILED"
+        job["error"] = str(e)
+    finally:
+        job["finished_at"] = now_utc()
+        job["duration_seconds"] = (
+            job["finished_at"] - job["started_at"]
+        ).total_seconds()
+
 def run_sleep_job(job_id: str) -> None:
     """
     Worker logic for a sleep job.
@@ -43,6 +66,8 @@ def run_sleep_job(job_id: str) -> None:
 
 JOB_HANDLERS = {
     "sleep": run_sleep_job,
+    "echo": run_echo_job,
+
 }
 
 @app.post("/jobs")  # Handle POST requests sent to /jobs
@@ -66,12 +91,23 @@ def create_job(job: dict, background_tasks: BackgroundTasks):
             raise HTTPException(status_code=400, detail="seconds must be a number")
         if seconds <= 0:
             raise HTTPException(status_code=400, detail="seconds must be > 0")
+        
+    if job_type == "echo":
+        message = job.get("message")
+        if message is None:
+            raise HTTPException(status_code=400, detail="message is required")
+        if not isinstance(message, str):
+            raise HTTPException(status_code=400, detail="message must be a string")
+        if message.strip() == "":
+            raise HTTPException(status_code=400, detail="message must not be empty")
+
 
     JOBS[job_id] = {
         "id": job_id,
         "type": job_type,
         "state": "PENDING",
         "payload": job,
+        "result": None,
         "created_at": now_utc(),
         "started_at": None,
         "finished_at": None,
