@@ -1,125 +1,76 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from datetime import datetime, timezone
+from fastapi import FastAPI, Depends, HTTPException
+from sqlalchemy.orm import Session
 from uuid import uuid4
-from enum import Enum
-import time
+from datetime import datetime, timezone
 
-app = FastAPI()
+from .db import Base, engine, get_db
+from .models import Job
+from .schemas import JobCreate, JobOut
+from .queue import enqueue
 
-JOBS = {}  # job_id -> job dict
+app = FastAPI(title="Atlas")
 
+# Create tables (fine for MVP demo; you can swap to Alembic later)
+Base.metadata.create_all(bind=engine)
 
-class JobState(str, Enum):
-    PENDING = "PENDING"
-    RUNNING = "RUNNING"
-    SUCCESS = "SUCCESS"
-    FAILED = "FAILED"
-
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 def now_utc():
     return datetime.now(timezone.utc)
 
+def validate_job(job: JobCreate) -> None:
+    if job.max_retries < 0:
+        raise HTTPException(400, "max_retries must be >= 0")
+    if job.retry_delay_seconds < 0:
+        raise HTTPException(400, "retry_delay_seconds must be >= 0")
 
-def run_sleep_job(job_id: str) -> None:
-    job = JOBS.get(job_id)
-    if job is None:
-        return
-    if job["state"] != JobState.PENDING:
-        return
+    t = job.type
+    p = job.payload
 
-    job["state"] = JobState.RUNNING
-    job["started_at"] = now_utc()
+    if t == "sleep":
+        seconds = p.get("seconds")
+        if seconds is None or not isinstance(seconds, (int, float)) or seconds <= 0:
+            raise HTTPException(400, "sleep requires payload.seconds > 0")
+    elif t == "echo":
+        message = p.get("message")
+        if message is None or not isinstance(message, str) or not message.strip():
+            raise HTTPException(400, "echo requires payload.message (non-empty string)")
+    else:
+        raise HTTPException(400, f"Unsupported job type: {t}")
 
-    try:
-        seconds = job["payload"]["seconds"]
-        time.sleep(seconds)
-        job["state"] = JobState.SUCCESS
-        job["result"] = {"slept_seconds": seconds}
+@app.post("/jobs", response_model=JobOut)
+def create_job(body: JobCreate, db: Session = Depends(get_db)):
+    validate_job(body)
 
-    except Exception as e:
-        job["state"] = JobState.FAILED
-        job["error"] = str(e)
-
-    finally:
-        job["finished_at"] = now_utc()
-        if job["started_at"] is not None:
-            job["duration_seconds"] = (job["finished_at"] - job["started_at"]).total_seconds()
-
-
-def run_echo_job(job_id: str) -> None:
-    job = JOBS.get(job_id)
-    if job is None:
-        return
-    if job["state"] != JobState.PENDING:
-        return
-
-    job["state"] = JobState.RUNNING
-    job["started_at"] = now_utc()
-
-    try:
-        # simplest echo: return the payload as-is
-        job["result"] = job["payload"]
-        job["state"] = JobState.SUCCESS
-
-    except Exception as e:
-        job["state"] = JobState.FAILED
-        job["error"] = str(e)
-
-    finally:
-        job["finished_at"] = now_utc()
-        if job["started_at"] is not None:
-            job["duration_seconds"] = (job["finished_at"] - job["started_at"]).total_seconds()
-
-
-JOB_HANDLERS = {
-    "sleep": run_sleep_job,
-    "echo": run_echo_job,
-}
-
-
-@app.post("/jobs")
-def create_job(job: dict, background_tasks: BackgroundTasks):
     job_id = str(uuid4())
+    record = Job(
+        id=job_id,
+        type=body.type,
+        state="PENDING",
+        payload=body.payload,
+        result=None,
+        attempt=0,
+        max_retries=body.max_retries,
+        retry_delay_seconds=float(body.retry_delay_seconds),
+        last_error=None,
+        created_at=now_utc(),
+        started_at=None,
+        finished_at=None,
+        duration_seconds=None,
+    )
+    db.add(record)
+    db.commit()
 
-    job_type = job.get("type")
-    if not job_type:
-        raise HTTPException(status_code=400, detail="Job type is required")
+    enqueue(job_id)
 
-    handler = JOB_HANDLERS.get(job_type)
-    if handler is None:
-        raise HTTPException(status_code=400, detail=f"Unsupported job type: {job_type}")
+    db.refresh(record)  # after commit
+    return JobOut.model_validate(record)
 
-    # Job-specific validation
-    if job_type == "sleep":
-        seconds = job.get("seconds")
-        if seconds is None:
-            raise HTTPException(status_code=400, detail="seconds is required")
-        if not isinstance(seconds, (int, float)):
-            raise HTTPException(status_code=400, detail="seconds must be a number")
-        if seconds <= 0:
-            raise HTTPException(status_code=400, detail="seconds must be > 0")
-
-    JOBS[job_id] = {
-        "id": job_id,
-        "type": job_type,
-        "state": JobState.PENDING,
-        "payload": job,
-        "result": None,
-        "error": None,
-        "created_at": now_utc(),
-        "started_at": None,
-        "finished_at": None,
-        "duration_seconds": None,
-    }
-
-    background_tasks.add_task(handler, job_id)
-
-    return {"id": job_id, "state": JobState.PENDING}
-
-
-@app.get("/jobs/{job_id}")
-def get_job(job_id: str):
-    job = JOBS.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job
+@app.get("/jobs/{job_id}", response_model=JobOut)
+def get_job(job_id: str, db: Session = Depends(get_db)):
+    job = db.get(Job, job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return JobOut.model_validate(job)
