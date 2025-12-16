@@ -10,8 +10,15 @@ from .queue import enqueue
 
 app = FastAPI(title="Atlas")
 
-# Create tables (fine for MVP demo; you can swap to Alembic later)
-Base.metadata.create_all(bind=engine)
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    yield
+
+app = FastAPI(title="Atlas", lifespan=lifespan)
+
 
 @app.get("/health")
 def health():
