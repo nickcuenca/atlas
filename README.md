@@ -160,6 +160,23 @@ without overwhelming workers or infrastructure.
 
 ---
 
+## 📊 Performance
+
+Load tested with [Artillery](https://www.artillery.io/) across three phases: warm-up (10 req/s), sustained load (50 req/s), and peak load (100 req/s).
+
+| Metric | Result |
+|---|---|
+| Total requests | 25,200 |
+| Error rate | **0%** |
+| p95 API latency | **6ms** |
+| p99 API latency | **15ms** |
+| Peak throughput | **200 req/sec** |
+| Failed virtual users | **0** |
+
+All requests returned HTTP 200. No dropped connections or worker failures under peak load.
+
+---
+
 ## 🐳 Local Development (Docker)
 
 ### Prerequisites
@@ -177,15 +194,20 @@ This starts:
 - PostgreSQL
 - Worker process
 
-### Test (PowerShell example)
-```powershell
-$job = Invoke-RestMethod `
-  -Method POST `
-  -Uri http://localhost:8000/jobs `
-  -ContentType "application/json" `
-  -Body '{"type":"echo","payload":{"message":"hello"}}'
+### Run the load test
+```bash
+artillery run load-test/load-test.yml
+```
 
-Invoke-RestMethod -Method GET -Uri ("http://localhost:8000/jobs/" + $job.id)
+### Test manually
+```bash
+# Submit a job
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"type": "echo", "payload": {"message": "hello atlas"}}'
+
+# Check job status
+curl http://localhost:8000/jobs/<job_id>
 ```
 
 ---
